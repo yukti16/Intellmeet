@@ -2,162 +2,214 @@
 
 > **"Turn Every Meeting Into Action."**
 
-IntellMeet is an AI-powered enterprise meeting and collaboration platform built for remote and hybrid teams. It integrates WebRTC video conferencing, real-time Socket.io signaling, screen sharing, live chat, team workspaces, meeting scheduling, automated transcription, and OpenAI-driven meeting intelligence (summaries, key points, action item extraction, and follow-up recommendations).
+IntellMeet is a full-stack, enterprise-grade AI meeting and collaboration platform designed for modern remote and hybrid teams. It unifies WebRTC multi-party video conferencing, Socket.io signaling, high-DPI screen sharing, real-time in-meeting chat, team workspaces with granular Role-Based Access Control (RBAC), meeting scheduling, live speech transcription, and an AI-driven meeting intelligence engine that extracts executive summaries, discussion points, key decisions, prioritized action items, risks/blockers, and follow-up recommendations.
 
 ---
 
-## 🚀 Key Features
-
-- **WebRTC Multi-Party Video Conferencing**: Real-time peer video & audio streams with mic/camera toggle and high-DPI screen sharing (`getDisplayMedia`).
-- **OpenAI Meeting Intelligence**:
-  - Executive summary generation
-  - Key decision & discussion point extraction
-  - Automated action item extraction with due dates & priorities
-  - Development fallback engine if OpenAI API key is unconfigured
-- **Real-Time Chat & Signaling**: Socket.io-powered in-meeting chat, typing indicators, and WebRTC signaling.
-- **Team Workspaces & RBAC**: Role-Based Access Control (Admin, Manager, Member) across team workspaces.
-- **Dashboard & Recharts Analytics**: Metrics on meeting frequency, duration trends, productivity scores, and task completion.
-- **Search & Notifications**: Global MongoDB indexed search and real-time notification alerts.
-
----
-
-## 🛠️ Tech Stack
+## 🛠️ Complete Tech Stack
 
 ### Frontend
 - **Framework**: React 18 + Vite
-- **Styling**: Tailwind CSS + Custom Glassmorphism
+- **Styling**: Tailwind CSS + Custom Dark Theme Palette (`#0B0F19`, `#0f172a`, `#1e293b`) with Soft Pink & Purple Brand Accents
 - **Icons**: Lucide React
-- **Charts**: Recharts
-- **HTTP & Sockets**: Axios + Socket.io-client
-- **Real-Time Media**: WebRTC (`RTCPeerConnection`, `getUserMedia`, `getDisplayMedia`)
+- **Data Visualization**: Recharts (meeting analytics, productivity metrics, task completion rates)
+- **Networking**: Axios (JWT interceptors & global error handling) + Socket.io-client
+- **Media & Audio**: Native WebRTC (`RTCPeerConnection`, `getUserMedia`, `getDisplayMedia`) + Web Speech Recognition API
+- **Notifications**: React Hot Toast
 
 ### Backend
-- **Runtime**: Node.js + Express.js
-- **Database**: MongoDB + Mongoose ODM
-- **Real-Time**: Socket.io
-- **Security**: JWT Authentication, bcryptjs password hashing, Helmet, Rate Limiting, CORS
-- **AI**: OpenAI API v4 (`gpt-3.5-turbo`) + Dev Fallback Engine
+- **Runtime & Framework**: Node.js + Express.js
+- **Database & ODM**: MongoDB + Mongoose ODM (compound indexing, validation schemas)
+- **Real-Time Communication**: Socket.io (WebRTC signaling, chat, presence, notifications)
+- **Security & Authorization**: JWT (JSON Web Tokens), bcryptjs password hashing, Helmet HTTP headers, express-rate-limit, CORS origin protection
+- **AI Intelligence**: OpenAI API (`gpt-3.5-turbo`) + Built-in Intelligent Dev Fallback Engine
 
 ---
 
-## 📁 Project Structure
+## 🚀 Key Features Implemented
+
+1. **Multi-Party WebRTC Video Conferencing**:
+   - Audio/video toggling, camera flip, and screen sharing.
+   - Resilient polite-peer glare resolution and ICE candidate queuing.
+   - Remote participant state synchronization (mic muted, camera off indicators).
+
+2. **AI Meeting Insights Engine**:
+   - **Executive Summary**: Contextual synthesis of meeting objectives, blocker resolutions, and outcomes.
+   - **Discussion Points**: Utterance grouping by speaker and theme.
+   - **Key Decisions**: Formal commitments and rollout strategies without generic single-word phrases.
+   - **Action Items**: Explicit assignees, deadlines, and urgency priorities (`High`, `Medium`, `Low`).
+   - **Risk & Blocker Detection**: Detection of dependencies, bottlenecks, and technical roadblocks.
+   - **Follow-Up Recommendations**: Practical next steps and review milestones.
+   - **Dual Engine Architecture**: Works seamlessly with live OpenAI keys or the transcript-driven Dev Fallback Engine.
+
+3. **Team Workspaces & RBAC**:
+   - Workspaces categorize meetings, documentation, and members.
+   - Dynamic real-time user lookup excluding existing workspace members.
+   - Secure email invitation system for unregistered team members.
+   - Granular permissions: **Owner** (full control), **Admin** (member & settings management), **Member** (view & participate).
+   - Dedicated tabs: **Overview**, **Members**, **Meetings**, **Action Items**, **Resources**.
+
+4. **Action Item Lifecycle**:
+   - Extracted tasks persist directly to MongoDB linked to meeting and workspace contexts.
+   - Full CRUD: In-place status transitions (`Pending` ➔ `In Progress` ➔ `Completed`), priority tuning, and assignee reallocation.
+
+5. **In-Meeting Collaboration**:
+   - In-room text chat with message editing and deletion.
+   - Real-time attendee roster with active speaking indicators.
+   - Live speech-to-text transcript panel with instant Socket.io broadcast.
+
+---
+
+## 📁 Repository Structure
 
 ```
 intellmeet/
-├── package.json                 # Monorepo scripts (concurrently dev launcher)
-├── .env.example                 # Root environment template
-├── README.md
+├── package.json                 # Monorepo dev launcher scripts
+├── README.md                    # Project documentation & demonstration scenarios
 ├── server/
+│   ├── .env.example             # Server environment configuration template
 │   ├── src/
-│   │   ├── config/              # MongoDB & JWT configuration
-│   │   ├── controllers/         # Auth, Meeting, Workspace, AI, ActionItem, Notification controllers
-│   │   ├── middleware/          # JWT protect, Role RBAC, and Error Handler middlewares
-│   │   ├── models/              # User, Workspace, Meeting, Message, Notification, ActionItem schemas
-│   │   ├── routes/              # Express API route modules
-│   │   ├── services/            # OpenAI AI Service & Transcription service
-│   │   ├── sockets/             # WebRTC signaling, Chat, & Notification sockets
-│   │   ├── utils/               # Code generator utility
-│   │   ├── tests/               # Backend tests
-│   │   ├── app.js               # Express application configuration
-│   │   ├── server.js            # HTTP & Socket.io server entry point
-│   │   └── seed.js              # Database seed script with demo credentials
-│   ├── package.json
-│   └── .env.example
+│   │   ├── config/              # MongoDB connection & JWT utilities
+│   │   ├── controllers/         # Auth, Meeting, Workspace, ActionItem, User, AI controllers
+│   │   ├── middleware/          # authMiddleware (JWT protect), errorMiddleware
+│   │   ├── models/              # User, Workspace, WorkspaceMember, Meeting, ActionItem, Message, Notification
+│   │   ├── routes/              # Express API route definitions
+│   │   ├── services/            # aiService (OpenAI + Fallback), meetingService
+│   │   ├── sockets/             # meetingSocket, chatSocket, notificationSocket
+│   │   ├── utils/               # textUtils, dateUtils, generateCode
+│   │   ├── tests/               # auth, aiService, workspace, actionItem, e2eWorkflow tests
+│   │   ├── app.js               # Express application setup
+│   │   ├── server.js            # HTTP & Socket.io server bootstrap
+│   │   └── seed.js              # Database seed script
+│   └── package.json
 └── client/
+    ├── .env.example             # Client environment template
     ├── src/
-    │   ├── components/          # VideoTile, MeetingCard, ActionItemCard, ChatPanel, Drawers, Modals
-    │   ├── context/             # AuthContext & SocketContext
-    │   ├── pages/               # Landing, Auth, Dashboard, Meetings, Room, Details, Workspaces, Team, AI Insights, Settings
-    │   ├── services/            # API client & domain service modules
-    │   ├── App.jsx              # Application router & protected routes
-    │   ├── index.css
+    │   ├── components/          # MeetingCard, WorkspaceCard, ActionItemCard, VideoTile, Modals, Drawers
+    │   ├── context/             # AuthContext, SocketContext, rtcContext
+    │   ├── pages/               # Dashboard, Meetings, MeetingRoom, Workspaces, Team, Settings
+    │   ├── services/            # api, authService, meetingService, workspaceService, userService
+    │   ├── utils/               # meetingUtils, webrtcCleanup
+    │   ├── App.jsx              # Client router with ProtectedRoute guards
     │   └── main.jsx
-    ├── package.json
     ├── tailwind.config.js
     └── vite.config.js
 ```
 
 ---
 
-## ⚙️ Environment Variables Setup
+## ⚙️ Environment Configuration
 
-Create a `.env` file in `server/` or copy from `.env.example`:
-
+### 1. Backend (`server/.env`)
+Copy `server/.env.example` to `server/.env`:
 ```env
 PORT=5000
-MONGO_URI=mongodb://localhost:27017/intellmeet
-JWT_SECRET=intellmeet_super_secret_jwt_key_2026_production_ready
+MONGO_URI=mongodb://127.0.0.1:27017/intellmeet
+JWT_SECRET=intellmeet_production_secure_jwt_secret_key_2026
 OPENAI_API_KEY=sk-proj-your-openai-api-key-here
 CLIENT_URL=http://localhost:5173
 AI_PROVIDER=openai
 NODE_ENV=development
 ```
+*Note: If `OPENAI_API_KEY` is omitted or unconfigured, IntellMeet automatically activates its built-in Intelligent Dev Fallback Engine.*
 
-*Note: If `OPENAI_API_KEY` is not provided, IntellMeet automatically runs using its built-in Intelligent Development Fallback Engine without crashing.*
+### 2. Frontend (`client/.env`)
+Copy `client/.env.example` to `client/.env`:
+```env
+VITE_API_URL=http://localhost:5000/api
+VITE_SOCKET_URL=http://localhost:5000
+```
 
 ---
 
-## 🔑 Demo Credentials
+## 🔑 Demo User Accounts
 
-Run the seed script to populate demo users and meetings:
-
+Run the database seeder to populate sample enterprise users, meetings, workspaces, and action items:
 ```bash
 npm run seed
 ```
 
-### Demo Accounts:
-- **Admin**: `admin@intellmeet.com` / `password123`
-- **Manager**: `manager@intellmeet.com` / `password123`
-- **Member**: `member@intellmeet.com` / `password123`
+| Role | Email | Password | Permissions |
+|---|---|---|---|
+| **Admin** | `admin@intellmeet.com` | `password123` | System Administrator & Executive |
+| **Manager** | `manager@intellmeet.com` | `password123` | Engineering Manager |
+| **Member** | `member@intellmeet.com` | `password123` | Senior Product Designer |
 
 ---
 
-## 🚀 Running the Application
+## 🚀 Running the Platform Locally
 
-### 1. Install Dependencies
+### Step 1: Install Dependencies
 ```bash
+# In the repository root
 npm run install:all
 ```
-*(or run `npm install` inside root, `server/`, and `client/` folders)*
+*(Alternatively: run `npm install` inside root, `server/`, and `client/`)*
 
-### 2. Start Both Server & Client Concurrently
+### Step 2: Seed Initial Data
+```bash
+npm run seed
+```
+
+### Step 3: Start Development Servers
 ```bash
 npm run dev
 ```
-- **Client Application**: `http://localhost:5173`
-- **Backend API**: `http://localhost:5000`
-
-### 3. Run Individual Components
-- **Server only**: `npm run dev:server`
-- **Client only**: `npm run dev:client`
-- **Seed Data**: `npm run seed`
-- **Backend Tests**: `npm run test`
+- **Web Application**: `http://localhost:5173`
+- **REST API & Sockets**: `http://localhost:5000`
 
 ---
 
-## 📡 Main REST API Endpoints
+## 🧪 Automated Testing Suite
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/auth/register` | Register new user |
-| `POST` | `/api/auth/login` | Authenticate user & get JWT |
-| `GET` | `/api/auth/me` | Get current user profile |
-| `GET` | `/api/meetings` | Get meeting list with filters |
-| `POST` | `/api/meetings` | Create / schedule new meeting |
-| `GET` | `/api/meetings/:id` | Get meeting details by ID or code |
-| `POST` | `/api/meetings/:id/join` | Join meeting room |
-| `POST` | `/api/meetings/:id/end` | End meeting & trigger AI analysis |
-| `GET` | `/api/workspaces` | List team workspaces |
-| `POST` | `/api/ai/summarize` | Generate AI summary for transcript |
-| `GET` | `/api/action-items` | Get assigned action items |
+IntellMeet utilizes Node.js's native test runner (`node:test` and `node:assert`) without heavy third-party runners:
+
+```bash
+npm test --prefix server
+```
+
+### Verified Test Suites:
+1. `server/src/tests/auth.test.js`: Token creation, tampering verification, and route protection guards.
+2. `server/src/tests/aiService.test.js`: Technical term preservation (`Socket.io`), multi-speaker decision parsing, deadline extraction, and the **Q4 Product Launch Planning benchmark scenario**.
+3. `server/src/tests/workspace.test.js`: Schema validations, embedded resource schemas, and email invitation models.
+4. `server/src/tests/actionItem.test.js`: Title sanitation, status transitions (`Pending` ➔ `In Progress` ➔ `Completed`), and priority validations.
+5. `server/src/tests/e2eWorkflow.test.js`: Full lifecycle test from multi-user join and live transcription to AI analysis and database mutation.
 
 ---
 
-## ⚡ Socket.io Events
+## 📸 Recommended Demonstration Scenarios & Walkthrough Checklist
 
-- `join-meeting`: Join specific meeting room (`INT-XXXXXX`)
-- `user-joined`: Broadcast when new participant enters room
-- `offer` / `answer` / `ice-candidate`: WebRTC media stream signaling
-- `toggle-audio` / `toggle-video`: Real-time media state synchronization
-- `send-message` / `receive-message`: In-meeting real-time chat
-- `end-meeting`: Host command to terminate live meeting for all participants
+For live presentations, grading, or demo video recordings:
+
+### Scenario 1: Authentication & Workspace Dashboard
+- **Action**: Log in as `admin@intellmeet.com`.
+- **View**: Main Analytics Dashboard showing meeting frequency and productivity scores.
+- **Navigate**: Open **Workspaces** from the sidebar. Note search bar, sort options, and cards with live member/meeting counts.
+
+### Scenario 2: Workspace Management & Real-Time Member Addition
+- **Action**: Open `"Core Architecture Workspace"`.
+- **View**: Tabbed layout (**Overview**, **Members**, **Meetings**, **Action Items**, **Resources**).
+- **Test**: Click **Add Member** ➔ Use the searchable dropdown to find registered colleagues, or switch to the **Invite by Email** tab to send a pending invite to an external colleague.
+
+### Scenario 3: Scheduling a Workspace Meeting
+- **Action**: In the workspace **Meetings** tab, click **Schedule Meeting**.
+- **Observation**: Note that the workspace field is automatically locked with a `"Fixed"` badge to guarantee strict association with the current workspace.
+- **Submit**: Create the meeting. Verify it appears immediately in the workspace's meeting list and the global `/meetings` directory.
+
+### Scenario 4: Live Meeting Room & Multi-User Conferencing
+- **Action**: Join the live room using the meeting code in two separate browser windows (one as Admin, one in Incognito as Member).
+- **Test**: Verify two-way video rendering, mic mute toggle, in-room real-time chat, and live speech transcription.
+
+### Scenario 5: Meeting Termination & Automated AI Insights
+- **Action**: As host, click **End Meeting for Everyone**.
+- **Observation**: Both windows automatically leave the live room. The host is redirected to the **Meeting Details Page**.
+- **Verify**: Inspect the generated **Executive Summary**, **Key Discussion Points**, **Key Decisions**, **Identified Risks & Blockers**, and **Follow-Up Recommendations**.
+- **Action Items**: Confirm that extracted commitments are properly assigned to participants with deadlines and priorities, and can be edited in place.
+
+---
+
+## 🔍 Honest Evaluation & Known Considerations
+
+- **Browser Audio Permissions**: Web Speech transcription relies on browser-native SpeechRecognition (`webkitSpeechRecognition`). In non-Chromium browsers or non-HTTPS production deployments, the browser blocks microphone access; the platform gracefully displays an inline transcription warning and uses the Dev Fallback Engine.
+- **STUN/TURN Servers**: WebRTC signaling uses Google's public STUN servers (`stun:stun.l.google.com:19302`). For deployment across restrictive enterprise symmetric NATs, a custom TURN server (e.g. coturn) should be configured in `rtcContext.jsx`.
+- **Sandbox Process Spawning**: Terminal background command spawning is restricted in certain Windows sandbox configurations (`Access is denied`), while all API endpoints, models, socket handlers, and client components function directly via Node.js and Vite.

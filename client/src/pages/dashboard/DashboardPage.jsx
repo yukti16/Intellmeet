@@ -9,6 +9,7 @@ import { ActionItemCard } from '../../components/actionItem/ActionItemCard';
 import { CreateMeetingModal } from '../../components/meeting/CreateMeetingModal';
 import { Button } from '../../components/common/Button';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { getMeetingEffectiveStatus } from '../../utils/meetingUtils';
 import {
   Video,
   Calendar,
@@ -69,8 +70,14 @@ export const DashboardPage = () => {
     }
   };
 
-  const upcomingMeetings = meetings.filter((m) => m.status === 'scheduled' || m.status === 'live');
-  const completedMeetings = meetings.filter((m) => m.status === 'ended');
+  const upcomingMeetings = meetings.filter((m) => {
+    const s = getMeetingEffectiveStatus(m);
+    return s === 'scheduled' || s === 'live';
+  });
+  const completedMeetings = meetings.filter((m) => {
+    const s = getMeetingEffectiveStatus(m);
+    return s === 'ended';
+  });
 
   // Chart data
   const weeklyData = [

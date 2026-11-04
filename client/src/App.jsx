@@ -12,6 +12,7 @@ import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage';
 import { DashboardPage } from './pages/dashboard/DashboardPage';
 import { MeetingsPage } from './pages/meetings/MeetingsPage';
 import { MeetingRoomPage } from './pages/meetings/MeetingRoomPage';
+import { RTCProvider } from './context/rtcContext';
 import { MeetingDetailsPage } from './pages/meetings/MeetingDetailsPage';
 import { WorkspacesPage } from './pages/workspaces/WorkspacesPage';
 import { WorkspaceDetailsPage } from './pages/workspaces/WorkspaceDetailsPage';
@@ -42,7 +43,7 @@ const PublicRoute = ({ children }) => {
 export default function App() {
   return (
     <AuthProvider>
-      <SocketProvider>
+      <SocketProvider><RTCProvider>
         <BrowserRouter>
           <Routes>
             {/* Public Routes */}
@@ -86,7 +87,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
-      </SocketProvider>
+      </RTCProvider></SocketProvider>
     </AuthProvider>
   );
 }

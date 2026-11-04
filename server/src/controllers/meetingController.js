@@ -2,8 +2,13 @@ const mongoose = require('mongoose');
 const Meeting = require('../models/Meeting');
 const ActionItem = require('../models/ActionItem');
 const Notification = require('../models/Notification');
+const User = require('../models/User');
+const Workspace = require('../models/Workspace');
+const WorkspaceMember = require('../models/WorkspaceMember');
 const { generateMeetingCode } = require('../utils/generateCode');
 const { generateMeetingSummary, extractKeyPoints, extractActionItems } = require('../services/aiService');
+const { parseDueDate } = require('../utils/dateUtils');
+const { cleanActionTitle, normalizeTitle } = require('../utils/textUtils');
 
 // @desc    Get meetings list with search/filter
 // @route   GET /api/meetings
@@ -11,27 +16,48 @@ const { generateMeetingSummary, extractKeyPoints, extractActionItems } = require
 const getMeetings = async (req, res, next) => {
   try {
     const { status, workspace, search } = req.query;
-    let query = {
-      $or: [{ host: req.user._id }, { participants: req.user._id }],
-    };
+    let query = {};
+
+    if (workspace && mongoose.Types.ObjectId.isValid(workspace)) {
+      // Check workspace membership or global Admin
+      const ws = await Workspace.findById(workspace);
+      if (ws) {
+        const isOwner = ws.owner.toString() === req.user._id.toString();
+        const isMember = ws.members.some((m) => m.toString() === req.user._id.toString());
+        const hasMembership = await WorkspaceMember.exists({ workspace: ws._id, user: req.user._id });
+        const canAccessWorkspace = isOwner || isMember || Boolean(hasMembership) || req.user.role === 'Admin';
+
+        if (!canAccessWorkspace) {
+          return res.status(403).json({
+            success: false,
+            message: 'Not authorized to view meetings for this workspace',
+          });
+        }
+      }
+      // When workspace filter is present, fetch meetings belonging to that workspace
+      query.workspace = workspace;
+    } else {
+      // Global meetings: user is host or participant
+      query.$or = [{ host: req.user._id }, { participants: req.user._id }];
+    }
 
     if (status) {
       query.status = status;
     }
-    if (workspace && mongoose.Types.ObjectId.isValid(workspace)) {
-      query.workspace = workspace;
-    }
+
     if (search) {
-      query.$and = [
-        { $or: [{ host: req.user._id }, { participants: req.user._id }] },
-        {
-          $or: [
-            { title: { $regex: search, $options: 'i' } },
-            { description: { $regex: search, $options: 'i' } },
-            { meetingCode: { $regex: search, $options: 'i' } },
-          ],
-        },
-      ];
+      const searchCondition = {
+        $or: [
+          { title: { $regex: search, $options: 'i' } },
+          { description: { $regex: search, $options: 'i' } },
+          { meetingCode: { $regex: search, $options: 'i' } },
+        ],
+      };
+      if (query.$and) {
+        query.$and.push(searchCondition);
+      } else {
+        query.$and = [searchCondition];
+      }
     }
 
     const meetings = await Meeting.find(query)
@@ -101,12 +127,18 @@ const createMeeting = async (req, res, next) => {
   try {
     const { title, description, workspace, scheduledAt, duration, participantIds } = req.body;
 
-    if (!title) {
+    const trimmedTitle = typeof title === 'string' ? title.trim() : '';
+    if (!trimmedTitle || !/[a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF]/.test(trimmedTitle)) {
       return res.status(400).json({
         success: false,
-        message: 'Meeting title is required',
+        message: 'Valid meeting title containing letters or numbers is required',
       });
     }
+
+    const cleanDescription =
+      typeof description === 'string' && /[a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF]/.test(description)
+        ? description.trim()
+        : '';
 
     let code = generateMeetingCode();
     // Ensure code uniqueness
@@ -121,11 +153,36 @@ const createMeeting = async (req, res, next) => {
       participantsList.push(req.user._id);
     }
 
+    let validatedWorkspace = null;
+    if (workspace && mongoose.Types.ObjectId.isValid(workspace)) {
+      const ws = await Workspace.findById(workspace);
+      if (!ws) {
+        return res.status(404).json({
+          success: false,
+          message: 'Specified workspace not found',
+        });
+      }
+
+      const isOwner = ws.owner.toString() === req.user._id.toString();
+      const isMember = ws.members.some((m) => m.toString() === req.user._id.toString());
+      const hasMembership = await WorkspaceMember.exists({ workspace: ws._id, user: req.user._id });
+      const isAuthorized = isOwner || isMember || Boolean(hasMembership) || req.user.role === 'Admin';
+
+      if (!isAuthorized) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to schedule meetings in this workspace',
+        });
+      }
+
+      validatedWorkspace = ws._id;
+    }
+
     const meeting = await Meeting.create({
-      title,
-      description: description || '',
+      title: trimmedTitle,
+      description: cleanDescription,
       host: req.user._id,
-      workspace: workspace && mongoose.Types.ObjectId.isValid(workspace) ? workspace : null,
+      workspace: validatedWorkspace,
       participants: participantsList,
       scheduledAt: scheduledAt || new Date(),
       duration: duration || 30,
@@ -241,12 +298,12 @@ const endMeeting = async (req, res, next) => {
     }
 
     meeting.status = 'ended';
-    if (transcript && Array.isArray(transcript)) {
+    if (transcript && Array.isArray(transcript) && transcript.length > 0) {
       meeting.transcript = transcript;
     }
 
     // Combine transcript text for AI processing
-    const transcriptText = meeting.transcript
+    const transcriptText = (meeting.transcript || [])
       .map(t => `${t.speaker}: ${t.text}`)
       .join('\n');
 
@@ -258,30 +315,101 @@ const endMeeting = async (req, res, next) => {
     meeting.summary = aiSummary;
     meeting.keyPoints = keyPoints;
 
-    // Create ActionItem documents
-    const parseDueDate = (dueDateStr) => {
-      if (!dueDateStr || dueDateStr === 'TBD') return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-      const cleaned = String(dueDateStr).replace(/^(?:by|on|before|due)\s+/i, '').trim();
-      const parsed = Date.parse(cleaned);
-      return isNaN(parsed) ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) : new Date(parsed);
-    };
+    // Fetch existing action items linked to this meeting to protect user-created/edited tasks
+    const existingActionItems = await ActionItem.find({ meeting: meeting._id });
 
-    const createdActionItemIds = [];
+    // Build map of existing tasks by normalized title to prevent duplicates and protect edits
+    const existingByNormalizedTitle = new Map();
+    existingActionItems.forEach((item) => {
+      const norm = normalizeTitle(item.title);
+      if (norm) {
+        existingByNormalizedTitle.set(norm, item);
+      }
+    });
+
+    const finalActionItemIds = existingActionItems.map((item) => item._id);
+
+    // Resolve participants for assignee matching
+    const allParticipantIds = [meeting.host, ...(meeting.participants || [])];
+    const participantUsers = await User.find({ _id: { $in: allParticipantIds } }).select('_id name email');
+
     for (const item of rawActionItems) {
+      const cleanTitle = cleanActionTitle(item.title, item.assignedTo);
+      const normTitle = normalizeTitle(cleanTitle);
+      if (!normTitle) continue;
+
+      // Duplicate prevention: If a task with this normalized title already exists for this meeting, preserve it
+      if (existingByNormalizedTitle.has(normTitle)) {
+        continue;
+      }
+
+      // Resolve assignee: match extracted name only against actual meeting participants or host.
+      // Default is null (Unassigned) — never arbitrarily assign to host!
+      let targetAssignee = null;
+      let matchedUser = null;
+      if (item.assignedTo && typeof item.assignedTo === 'string' && item.assignedTo !== 'Unassigned') {
+        const queryName = item.assignedTo.trim().toLowerCase();
+        matchedUser = participantUsers.find((u) => {
+          const uName = (u.name || '').toLowerCase();
+          const parts = uName.split(/\s+/);
+          return (
+            uName === queryName ||
+            parts.some((p) => p === queryName) ||
+            uName.includes(queryName)
+          );
+        });
+
+        if (matchedUser) {
+          targetAssignee = matchedUser._id;
+        }
+      }
+
+      // Preserve speaker and context in description
+      let description = item.description || '';
+      if (item.assignedTo && item.assignedTo !== 'Unassigned' && !matchedUser) {
+        description = description
+          ? `${description} (Intended for ${item.assignedTo})`
+          : `Mentioned for ${item.assignedTo} (not present in meeting).`;
+      }
+
       const actionDoc = await ActionItem.create({
         meeting: meeting._id,
-        title: item.title,
-        description: item.description || '',
-        assignedTo: req.user._id, // default to host/user
+        title: cleanTitle,
+        description,
+        assignedTo: targetAssignee,
         priority: item.priority || 'Medium',
         dueDate: parseDueDate(item.dueDate),
         status: item.status || 'Pending',
+        source: 'ai',
+        createdBy: req.user._id,
       });
-      createdActionItemIds.push(actionDoc._id);
+
+      existingByNormalizedTitle.set(normTitle, actionDoc);
+      finalActionItemIds.push(actionDoc._id);
+
+      // Notify assigned user if different from the host
+      if (targetAssignee && targetAssignee.toString() !== req.user._id.toString()) {
+        await Notification.create({
+          user: targetAssignee,
+          type: 'action_item_assigned',
+          title: 'New Action Item Assigned',
+          message: `${req.user.name} assigned you a task: "${cleanTitle}"`,
+          link: `/meetings/${meeting._id}`,
+        }).catch((err) => console.warn('[ActionItem Notification Error]', err.message));
+      }
     }
 
-    meeting.actionItems = createdActionItemIds;
+    meeting.actionItems = finalActionItemIds;
     await meeting.save();
+
+    const populatedMeeting = await Meeting.findById(meeting._id)
+      .populate('host', 'name email avatar jobTitle department')
+      .populate('participants', 'name email avatar jobTitle status department')
+      .populate('workspace', 'name description')
+      .populate({
+        path: 'actionItems',
+        populate: { path: 'assignedTo', select: 'name email avatar' },
+      });
 
     // Notify participants that summary is ready
     for (const pId of meeting.participants) {
@@ -297,7 +425,7 @@ const endMeeting = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: 'Meeting ended and AI analysis completed',
-      meeting,
+      meeting: populatedMeeting,
     });
   } catch (error) {
     next(error);
@@ -330,8 +458,22 @@ const updateMeeting = async (req, res, next) => {
 
     const { title, description, scheduledAt, duration, status, transcript } = req.body;
 
-    if (title) meeting.title = title;
-    if (description !== undefined) meeting.description = description;
+    if (title !== undefined) {
+      const trimmed = typeof title === 'string' ? title.trim() : '';
+      if (!trimmed || !/[a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF]/.test(trimmed)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Valid meeting title containing letters or numbers is required',
+        });
+      }
+      meeting.title = trimmed;
+    }
+    if (description !== undefined) {
+      meeting.description =
+        typeof description === 'string' && /[a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF]/.test(description)
+          ? description.trim()
+          : '';
+    }
     if (scheduledAt) meeting.scheduledAt = scheduledAt;
     if (duration) meeting.duration = duration;
     if (status) meeting.status = status;

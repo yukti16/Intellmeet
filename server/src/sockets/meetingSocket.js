@@ -1,3 +1,4 @@
+
 /**
  * WebRTC Signaling & Meeting State Socket Handler
  */
@@ -5,39 +6,55 @@
 const meetingSockets = (io, socket) => {
   // User joins a specific meeting room
   socket.on('join-meeting', ({ meetingCode, userId, userName }) => {
+    if (!meetingCode) {
+      console.error('[Socket] Cannot join meeting: meetingCode is missing');
+      return;
+    }
+
+    console.log(
+      `[Socket] join-meeting from socket ${socket.id} for meeting ${meetingCode} userId=${userId || 'undef'} userName=${userName || 'Guest'}`
+    );
+
     socket.join(meetingCode);
     socket.meetingCode = meetingCode;
     socket.userId = userId;
-    socket.userName = userName;
+    socket.userName = userName || 'Guest';
 
-    console.log(`[Socket] User '${userName}' (${userId}) joined room: ${meetingCode}`);
+    console.log(
+      `[Socket] User '${socket.userName}' (${userId || 'undef'}) joined room: ${meetingCode}`
+    );
 
-    // Get list of all clients in the room
+    // Get other clients already in the room
     const room = io.sockets.adapter.rooms.get(meetingCode);
-    const clientsInRoom = Array.from(room || []).filter(id => id !== socket.id);
+    const clientsInRoom = Array.from(room || []).filter(
+      (id) => id !== socket.id
+    );
 
-    // Send back list of existing participants to newly joined user
+    // Send existing participants to the new user
     socket.emit('existing-participants', {
-      participants: clientsInRoom.map(socketId => {
+      participants: clientsInRoom.map((socketId) => {
         const peerSocket = io.sockets.sockets.get(socketId);
+
         return {
           socketId,
           userId: peerSocket?.userId,
-          userName: peerSocket?.userName,
+          userName: peerSocket?.userName || 'Guest',
         };
       }),
     });
 
-    // Notify other room members that a new user joined
+    // Notify existing participants
     socket.to(meetingCode).emit('user-joined', {
       socketId: socket.id,
       userId,
-      userName,
+      userName: socket.userName,
     });
   });
 
   // WebRTC Offer
   socket.on('offer', ({ target, caller, offer }) => {
+    if (!target || !offer) return;
+
     io.to(target).emit('offer', {
       caller,
       offer,
@@ -47,6 +64,8 @@ const meetingSockets = (io, socket) => {
 
   // WebRTC Answer
   socket.on('answer', ({ target, caller, answer }) => {
+    if (!target || !answer) return;
+
     io.to(target).emit('answer', {
       caller,
       answer,
@@ -56,6 +75,8 @@ const meetingSockets = (io, socket) => {
 
   // ICE Candidate relay
   socket.on('ice-candidate', ({ target, candidate }) => {
+    if (!target || !candidate) return;
+
     io.to(target).emit('ice-candidate', {
       candidate,
       socketId: socket.id,
@@ -64,16 +85,22 @@ const meetingSockets = (io, socket) => {
 
   // Media Toggles
   socket.on('toggle-audio', ({ meetingCode, userId, muted }) => {
-    socket.to(meetingCode).emit('user-toggled-audio', {
-      userId,
+    const roomCode = meetingCode || socket.meetingCode;
+    if (!roomCode) return;
+
+    socket.to(roomCode).emit('user-toggled-audio', {
+      userId: userId || socket.userId,
       socketId: socket.id,
       muted,
     });
   });
 
   socket.on('toggle-video', ({ meetingCode, userId, videoOff }) => {
-    socket.to(meetingCode).emit('user-toggled-video', {
-      userId,
+    const roomCode = meetingCode || socket.meetingCode;
+    if (!roomCode) return;
+
+    socket.to(roomCode).emit('user-toggled-video', {
+      userId: userId || socket.userId,
       socketId: socket.id,
       videoOff,
     });
@@ -81,44 +108,79 @@ const meetingSockets = (io, socket) => {
 
   // Screen Sharing
   socket.on('screen-share-started', ({ meetingCode, userId }) => {
-    socket.to(meetingCode).emit('user-screen-share-started', {
-      userId,
+    const roomCode = meetingCode || socket.meetingCode;
+    if (!roomCode) return;
+
+    socket.to(roomCode).emit('user-screen-share-started', {
+      userId: userId || socket.userId,
       socketId: socket.id,
     });
   });
 
   socket.on('screen-share-stopped', ({ meetingCode, userId }) => {
-    socket.to(meetingCode).emit('user-screen-share-stopped', {
-      userId,
+    const roomCode = meetingCode || socket.meetingCode;
+    if (!roomCode) return;
+
+    socket.to(roomCode).emit('user-screen-share-stopped', {
+      userId: userId || socket.userId,
       socketId: socket.id,
     });
   });
 
-  // Host End Meeting for All
-  socket.on('end-meeting', ({ meetingCode }) => {
-    io.in(meetingCode).emit('meeting-ended-by-host');
+  // Live Transcript Entry Broadcast
+  socket.on('transcript-entry', ({ meetingCode, entry }) => {
+    const roomCode = meetingCode || socket.meetingCode;
+    if (!roomCode || !entry || !entry.text) return;
+
+    const sanitizedEntry = {
+      speaker: String(entry.speaker || socket.userName || 'Participant').trim(),
+      text: String(entry.text).trim(),
+      timestamp: String(
+        entry.timestamp ||
+          new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          })
+      ),
+    };
+
+    io.in(roomCode).emit('new-transcript-entry', sanitizedEntry);
   });
 
-  // Leave room handling
+  // Host ends the meeting for everyone
+  socket.on('end-meeting', ({ meetingCode } = {}) => {
+    const roomCode = meetingCode || socket.meetingCode;
+    if (!roomCode) return;
+
+    io.in(roomCode).emit('meeting-ended-by-host');
+  });
+
+  // Leave room
   socket.on('leave-meeting', () => {
-    if (socket.meetingCode) {
-      socket.to(socket.meetingCode).emit('user-left', {
-        socketId: socket.id,
-        userId: socket.userId,
-      });
-      socket.leave(socket.meetingCode);
-      socket.meetingCode = null;
-    }
+    const roomCode = socket.meetingCode;
+    if (!roomCode) return;
+
+    socket.to(roomCode).emit('user-left', {
+      socketId: socket.id,
+      userId: socket.userId,
+    });
+
+    socket.leave(roomCode);
+    socket.meetingCode = null;
   });
 
   // Disconnect cleanup
   socket.on('disconnect', () => {
-    if (socket.meetingCode) {
-      socket.to(socket.meetingCode).emit('user-left', {
-        socketId: socket.id,
-        userId: socket.userId,
-      });
-    }
+    const roomCode = socket.meetingCode;
+    if (!roomCode) return;
+
+    socket.to(roomCode).emit('user-left', {
+      socketId: socket.id,
+      userId: socket.userId,
+    });
+
+    socket.meetingCode = null;
   });
 };
 

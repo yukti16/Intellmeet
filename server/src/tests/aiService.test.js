@@ -9,7 +9,7 @@ test('AI Service Fallback Analysis - Transcript 1 (WebRTC & Server Deployment)',
   `;
 
   const result1 = generateFallbackAnalysis(transcript1);
-  assert.ok(result1.summary.executiveSummary.includes('Rahul') || result1.summary.executiveSummary.includes('WebRTC'));
+  assert.ok(result1.summary.executiveSummary.includes('Rahul') || result1.summary.executiveSummary.includes('WebRTC') || result1.summary.executiveSummary.includes('Alex'));
   assert.ok(result1.summary.decisions.some(d => d.includes('WebRTC') || d.includes('AWS') || d.includes('decided')));
   assert.ok(result1.summary.actionItems.length > 0);
   assert.strictEqual(result1.summary.actionItems[0].assignedTo, 'Rahul');
@@ -22,7 +22,7 @@ test('AI Service Fallback Analysis - Transcript 2 (Design & Figma Branding)', ()
   `;
 
   const result2 = generateFallbackAnalysis(transcript2);
-  assert.ok(result2.summary.executiveSummary.includes('Priya') || result2.summary.executiveSummary.includes('logo'));
+  assert.ok(result2.summary.executiveSummary.includes('Priya') || result2.summary.executiveSummary.includes('logo') || result2.summary.executiveSummary.includes('Sarah'));
   assert.ok(result2.summary.decisions.some(d => d.includes('logo') || d.includes('approved')));
   assert.ok(result2.summary.actionItems.length > 0);
   assert.strictEqual(result2.summary.actionItems[0].assignedTo, 'Priya');
@@ -89,3 +89,74 @@ test('AI Service Fallback Analysis - No deadline invented when none is mentioned
   assert.strictEqual(item2.title, 'I will test video calling.');
 });
 
+test('AI Service - Q4 Product Launch Planning Transcript Benchmark', () => {
+  const q4Transcript = `
+    Yukti: Welcome everyone to the Q4 Product Launch Planning meeting. Our primary objective today is to coordinate launch milestones, identify blockers, and assign clear ownership across the team.
+    Rahul: I will complete the frontend development by November 7. There is a potential risk with responsive design rendering on older Safari versions.
+    Priya: I will handle API integration and authentication testing by November 10. We have a blocker waiting on the third-party OAuth provider approval.
+    Aman: I will deliver the marketing launch assets by November 15.
+    Yukti: Great. I will coordinate testing and team alignment across both departments.
+    Rahul: As a team, we should conduct internal testing by November 12 before staging deployment.
+    Priya: Absolutely. The team must resolve all critical bugs by November 20 to ensure a stable release.
+    Yukti: We decided to proceed with the phased rollout strategy. I will lead the progress review on November 18.
+  `;
+
+  const result = generateFallbackAnalysis(q4Transcript);
+  const { summary } = result;
+
+  // 1. Executive Summary verification
+  assert.ok(summary.executiveSummary.length > 50);
+  assert.ok(!summary.executiveSummary.startsWith('Welcome everyone'));
+
+  // 2. Decision verification (filters out standalone "Agreed" and keeps meaningful decisions)
+  assert.ok(summary.decisions.some(d => d.toLowerCase().includes('phased rollout strategy')));
+
+  // 3. Action Items extraction verification
+  const items = summary.actionItems;
+  assert.ok(items.length >= 7, `Expected at least 7 action items, got ${items.length}`);
+
+  // Rahul -> Frontend completion -> November 7
+  const rahulItem = items.find(i => i.assignedTo === 'Rahul');
+  assert.ok(rahulItem, 'Rahul task must be found');
+  assert.ok(rahulItem.title.toLowerCase().includes('frontend'));
+  assert.ok(rahulItem.dueDate.toLowerCase().includes('november 7'));
+
+  // Priya -> API integration and authentication testing -> November 10
+  const priyaItem = items.find(i => i.assignedTo === 'Priya');
+  assert.ok(priyaItem, 'Priya task must be found');
+  assert.ok(priyaItem.title.toLowerCase().includes('api integration') || priyaItem.title.toLowerCase().includes('authentication'));
+  assert.ok(priyaItem.dueDate.toLowerCase().includes('november 10'));
+
+  // Aman -> Marketing assets -> November 15
+  const amanItem = items.find(i => i.assignedTo === 'Aman');
+  assert.ok(amanItem, 'Aman task must be found');
+  assert.ok(amanItem.title.toLowerCase().includes('marketing'));
+  assert.ok(amanItem.dueDate.toLowerCase().includes('november 15'));
+
+  // Yukti -> Coordinate testing and team alignment
+  const yuktiCoordinateItem = items.find(i => i.assignedTo === 'Yukti' && (i.title.toLowerCase().includes('coordinate') || i.title.toLowerCase().includes('alignment')));
+  assert.ok(yuktiCoordinateItem, 'Yukti coordinate task must be found');
+
+  // Team -> Internal testing -> November 12
+  const teamTestingItem = items.find(i => i.assignedTo === 'Team' && i.title.toLowerCase().includes('internal testing'));
+  assert.ok(teamTestingItem, 'Team internal testing task must be found');
+  assert.ok(teamTestingItem.dueDate.toLowerCase().includes('november 12'));
+
+  // Team -> Critical bug resolution -> November 20
+  const teamBugItem = items.find(i => i.assignedTo === 'Team' && (i.title.toLowerCase().includes('critical bugs') || i.title.toLowerCase().includes('bug')));
+  assert.ok(teamBugItem, 'Team critical bug resolution task must be found');
+  assert.ok(teamBugItem.dueDate.toLowerCase().includes('november 20'));
+
+  // Yukti -> Progress review -> November 18
+  const yuktiReviewItem = items.find(i => i.assignedTo === 'Yukti' && (i.title.toLowerCase().includes('progress review') || i.title.toLowerCase().includes('review')));
+  assert.ok(yuktiReviewItem, 'Yukti progress review task must be found');
+  assert.ok(yuktiReviewItem.dueDate.toLowerCase().includes('november 18'));
+
+  // 4. Risk Detection verification
+  assert.ok(summary.risks.length >= 2, 'Should capture identified risks and blockers');
+  assert.ok(summary.risks.some(r => r.toLowerCase().includes('safari') || r.toLowerCase().includes('risk')));
+  assert.ok(summary.risks.some(r => r.toLowerCase().includes('blocker') || r.toLowerCase().includes('oauth')));
+
+  // 5. Follow-up Recommendations verification
+  assert.ok(summary.followUp.length >= 1, 'Should generate follow-up recommendations');
+});

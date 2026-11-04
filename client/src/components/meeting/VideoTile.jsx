@@ -13,14 +13,17 @@ export const VideoTile = ({
 
   useEffect(() => {
     if (videoRef.current) {
-      videoRef.current.srcObject = stream || null;
-    }
-    return () => {
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
+      if (videoRef.current.srcObject !== stream) {
+        console.log(`[WebRTC DEBUG] Assigning stream to video element for user: ${userName} (isLocal=${isLocal}). Stream active=${stream?.active}, tracks=${stream ? stream.getTracks().map(t => `${t.kind}:${t.enabled}`).join(',') : 'null'}`);
+        videoRef.current.srcObject = stream || null;
       }
-    };
-  }, [stream]);
+      if (stream) {
+        videoRef.current.play().catch((err) => {
+          console.warn(`[WebRTC DEBUG] video.play() error for user: ${userName} (isLocal=${isLocal}):`, err.message);
+        });
+      }
+    }
+  }, [stream, userName, isLocal]);
 
   return (
     <div className="relative w-full h-full min-h-[220px] bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl flex items-center justify-center group">

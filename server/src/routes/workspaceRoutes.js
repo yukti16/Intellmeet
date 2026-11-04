@@ -5,8 +5,15 @@ const {
   getWorkspaceById,
   createWorkspace,
   updateWorkspace,
+  deleteWorkspace,
+  getEligibleWorkspaceUsers,
+  inviteWorkspaceMember,
+  cancelWorkspaceInvitation,
   addWorkspaceMember,
+  updateWorkspaceMemberRole,
   removeWorkspaceMember,
+  addWorkspaceResource,
+  deleteWorkspaceResource,
 } = require('../controllers/workspaceController');
 const { protect } = require('../middleware/authMiddleware');
 
@@ -18,9 +25,27 @@ router.route('/')
 
 router.route('/:id')
   .get(getWorkspaceById)
-  .put(updateWorkspace);
+  .put(updateWorkspace)
+  .delete(deleteWorkspace);
 
-router.post('/:id/members', addWorkspaceMember);
-router.delete('/:id/members/:userId', removeWorkspaceMember);
+router.get('/:id/eligible-users', getEligibleWorkspaceUsers);
+
+router.route('/:id/invitations')
+  .post(inviteWorkspaceMember);
+
+router.delete('/:id/invitations/:inviteId', cancelWorkspaceInvitation);
+
+router.route('/:id/members')
+  .post(addWorkspaceMember);
+
+router.route('/:id/members/:userId')
+  .put(updateWorkspaceMemberRole)
+  .delete(removeWorkspaceMember);
+
+router.route('/:id/resources')
+  .post(addWorkspaceResource);
+
+router.route('/:id/resources/:resourceId')
+  .delete(deleteWorkspaceResource);
 
 module.exports = router;

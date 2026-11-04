@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
 
 import { useNavigate } from 'react-router-dom';
@@ -9,21 +9,26 @@ import { Button } from '../../components/common/Button';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
 import { Video, Plus, Search, Filter } from 'lucide-react';
+import { getMeetingEffectiveStatus } from '../../utils/meetingUtils';
 
 export const MeetingsPage = () => {
   const [meetings, setMeetings] = useState([]);
   const [filterStatus, setFilterStatus] = useState('all');
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const handleDelete = (deletedMeeting) => {
+    setMeetings((prev) => prev.filter((m) => m._id !== deletedMeeting._id));
+  };
   const [joinCode, setJoinCode] = useState('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
+
+  const navigate = useNavigate();
 
   const fetchMeetings = async () => {
     setIsLoading(true);
     try {
       const params = {};
-      if (filterStatus !== 'all') params.status = filterStatus;
       if (search.trim()) params.search = search;
 
       const res = await meetingService.getMeetings(params);
@@ -37,7 +42,18 @@ export const MeetingsPage = () => {
 
   useEffect(() => {
     fetchMeetings();
-  }, [filterStatus]);
+  }, []);
+
+  const displayedMeetings = useMemo(() => {
+    if (filterStatus === 'all') return meetings;
+    return meetings.filter((m) => {
+      const eff = getMeetingEffectiveStatus(m);
+      if (filterStatus === 'scheduled') return eff === 'scheduled';
+      if (filterStatus === 'live') return eff === 'live';
+      if (filterStatus === 'ended') return eff === 'ended';
+      return true;
+    });
+  }, [meetings, filterStatus]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
@@ -127,7 +143,7 @@ export const MeetingsPage = () => {
       {/* Meetings Grid */}
       {isLoading ? (
         <LoadingSpinner label="Loading meetings..." />
-      ) : meetings.length === 0 ? (
+      ) : displayedMeetings.length === 0 ? (
         <EmptyState
           icon={Video}
           title="No meetings found"
@@ -137,8 +153,8 @@ export const MeetingsPage = () => {
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {meetings.map((m) => (
-            <MeetingCard key={m._id} meeting={m} />
+          {displayedMeetings.map((m) => (
+            <MeetingCard key={m._id} meeting={m} onDelete={handleDelete} />
           ))}
         </div>
       )}

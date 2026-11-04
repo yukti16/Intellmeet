@@ -1,12 +1,19 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { useRTC } from '../../context/rtcContext';
+
+
+
 import { useSocket } from '../../context/SocketContext';
 import { meetingService } from '../../services/meetingService';
 import { cleanupMediaAndPeers } from '../../utils/webrtcCleanup';
 import { VideoTile } from '../../components/meeting/VideoTile';
 import { ChatPanel } from '../../components/meeting/ChatPanel';
 import { ParticipantsPanel } from '../../components/meeting/ParticipantsPanel';
+import { TranscriptPanel } from '../../components/meeting/TranscriptPanel';
+import { useSpeechRecognition } from '../../hooks/useSpeechRecognition';
+import toast from 'react-hot-toast';
 import {
   Mic,
   MicOff,
@@ -19,17 +26,19 @@ import {
   Sparkles,
   FileText,
   Shield,
+  AlertCircle,
 } from 'lucide-react';
 
 export const MeetingRoomPage = () => {
   const { code } = useParams();
   const { user } = useAuth();
-  const { socket } = useSocket();
   const navigate = useNavigate();
+  const { socket } = useSocket();
+  const { participants, addRemoteParticipant } = useRTC();
 
   const [meeting, setMeeting] = useState(null);
   const [localStream, setLocalStream] = useState(null);
-  const [remoteStreams, setRemoteStreams] = useState({}); // { socketId: { stream, userName, userId, muted, videoOff } }
+
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -37,13 +46,51 @@ export const MeetingRoomPage = () => {
   const [cameraError, setCameraError] = useState('');
   const [showChat, setShowChat] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState([]);
-  const [isTranscribing, setIsTranscribing] = useState(true);
+  const liveTranscriptRef = useRef(liveTranscript);
+  useEffect(() => {
+    liveTranscriptRef.current = liveTranscript;
+  }, [liveTranscript]);
+  const [remoteStreams, setRemoteStreams] = useState({});
+  const remoteStreamsRef = useRef({});
+  useEffect(() => {
+    remoteStreamsRef.current = remoteStreams;
+  }, [remoteStreams]);
+
+  // Real-time speech recognition hook
+  const {
+    status: transcriptionStatus,
+    isSupported: isTranscriptionSupported,
+    isEnabled: isTranscriptionEnabled,
+    interimTranscript,
+    error: transcriptionError,
+    toggleTranscription,
+  } = useSpeechRecognition({
+    meetingCode: code ? code.toUpperCase() : '',
+    speakerName: user?.name || 'You',
+    isMuted,
+    socket,
+    onTranscriptEntry: (newEntry) => {
+      setLiveTranscript((prev) => {
+        const exists = prev.some(
+          (e) =>
+            e.speaker === newEntry.speaker &&
+            e.text.trim().toLowerCase() === newEntry.text.trim().toLowerCase() &&
+            e.timestamp === newEntry.timestamp
+        );
+        if (exists) return prev;
+        return [...prev, newEntry];
+      });
+    },
+  });
+
 
   const localStreamRef = useRef(null);
   const screenStreamRef = useRef(null);
   const cameraTrackRef = useRef(null);
   const peerConnections = useRef({}); // { socketId: RTCPeerConnection }
+  const pendingIceCandidates = useRef({}); // { socketId: RTCIceCandidate[] }
   const isCleanedUpRef = useRef(false);
 
   // Fetch meeting details
@@ -69,18 +116,21 @@ export const MeetingRoomPage = () => {
       cameraTrack: cameraTrackRef.current,
       screenStream: screenStreamRef.current,
       peerConnections: peerConnections.current,
-      socket,
+      // NOTE: socket is NOT passed here — the signaling useEffect cleanup
+      // removes listeners by specific handler reference, which is safer than
+      // the blanket socket.off() in cleanupMediaAndPeers.
     });
 
     localStreamRef.current = null;
     cameraTrackRef.current = null;
     screenStreamRef.current = null;
     peerConnections.current = {};
+    pendingIceCandidates.current = {};
 
     setLocalStream(null);
     setRemoteStreams({});
     setIsScreenSharing(false);
-  }, [socket]);
+  }, []);
 
   // WebRTC & Media Initialization with unmount track termination
   useEffect(() => {
@@ -100,12 +150,13 @@ export const MeetingRoomPage = () => {
           return;
         }
 
+        console.log('[WebRTC DEBUG] Local getUserMedia successful. Tracks:', stream.getTracks().map(t => `${t.kind}:${t.readyState}:${t.id}`));
         localStreamRef.current = stream;
         setLocalStream(stream);
         cameraTrackRef.current = stream.getVideoTracks()[0];
       } catch (err) {
         if (isCancelled) return;
-        console.warn('[WebRTC] Camera/Mic access denied or unavailable:', err.message);
+        console.warn('[WebRTC DEBUG] Camera/Mic access denied or unavailable:', err.message);
         // Fallback dummy audio/video stream for dev
         const canvas = document.createElement('canvas');
         canvas.width = 640;
@@ -114,6 +165,7 @@ export const MeetingRoomPage = () => {
         ctx.fillStyle = '#1e293b';
         ctx.fillRect(0, 0, 640, 480);
         const dummyStream = canvas.captureStream(10);
+        console.log('[WebRTC DEBUG] Fallback dummy stream created. Tracks:', dummyStream.getTracks().map(t => `${t.kind}:${t.readyState}`));
         localStreamRef.current = dummyStream;
         setLocalStream(dummyStream);
       }
@@ -134,112 +186,38 @@ export const MeetingRoomPage = () => {
     };
   }, [cleanupMeetingSession]);
 
-  // WebSockets & WebRTC Signaling Setup
+  // Create WebRTC PeerConnection (no signaling — caller decides when to offer)
+  // Attach local media tracks to any already‑created peer connections
   useEffect(() => {
-    if (!socket || !code || !user) return;
-
-    socket.emit('join-meeting', {
-      meetingCode: code.toUpperCase(),
-      userId: user._id,
-      userName: user.name,
-    });
-
-    // Handle existing participants in room
-    socket.on('existing-participants', ({ participants }) => {
-      participants.forEach((p) => {
-        createPeerConnection(p.socketId, p.userName, p.userId, true);
-      });
-    });
-
-    // Handle new user joining room
-    socket.on('user-joined', ({ socketId, userId, userName }) => {
-      createPeerConnection(socketId, userName, userId, false);
-    });
-
-    // Handle WebRTC Offer
-    socket.on('offer', async ({ socketId, offer, caller }) => {
-      const pc = peerConnections.current[socketId] || createPeerConnection(socketId, caller?.userName, caller?.userId, false);
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      socket.emit('answer', {
-        target: socketId,
-        caller: { userId: user._id, userName: user.name },
-        answer,
-      });
-    });
-
-    // Handle WebRTC Answer
-    socket.on('answer', async ({ socketId, answer }) => {
-      const pc = peerConnections.current[socketId];
-      if (pc) {
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
-      }
-    });
-
-    // Handle ICE Candidate
-    socket.on('ice-candidate', async ({ socketId, candidate }) => {
-      const pc = peerConnections.current[socketId];
-      if (pc && candidate) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (err) {
-          console.error('[ICE Error]', err);
+    if (!localStream) return;
+    console.log('[WebRTC DEBUG] localStream state updated. Attaching tracks to all peer connections:', Object.keys(peerConnections.current));
+    Object.entries(peerConnections.current).forEach(([peerId, pc]) => {
+      const existingIds = new Set(
+        pc.getSenders()
+          .filter((s) => s.track)
+          .map((s) => s.track.id)
+      );
+      localStream.getTracks().forEach((track) => {
+        if (!existingIds.has(track.id)) {
+          try {
+            console.log(`[WebRTC DEBUG] Adding track ${track.kind} (${track.id}) to peer ${peerId}`);
+            pc.addTrack(track, localStream);
+          } catch (e) {
+            console.warn('[WebRTC DEBUG] Failed to add track after stream start:', e);
+          }
         }
-      }
-    });
-
-    // Handle User Media Toggles
-    socket.on('user-toggled-audio', ({ socketId, muted }) => {
-      setRemoteStreams((prev) => ({
-        ...prev,
-        [socketId]: { ...prev[socketId], muted },
-      }));
-    });
-
-    socket.on('user-toggled-video', ({ socketId, videoOff }) => {
-      setRemoteStreams((prev) => ({
-        ...prev,
-        [socketId]: { ...prev[socketId], videoOff },
-      }));
-    });
-
-    // Handle Host End Meeting
-    socket.on('meeting-ended-by-host', () => {
-      alert('The host has ended this meeting.');
-      leaveMeetingRoom();
-    });
-
-    // Handle User Disconnect
-    socket.on('user-left', ({ socketId }) => {
-      if (peerConnections.current[socketId]) {
-        peerConnections.current[socketId].close();
-        delete peerConnections.current[socketId];
-      }
-      setRemoteStreams((prev) => {
-        const next = { ...prev };
-        delete next[socketId];
-        return next;
       });
     });
+  }, [localStream]);
 
-    return () => {
-      socket.emit('leave-meeting');
-      socket.off('existing-participants');
-      socket.off('user-joined');
-      socket.off('offer');
-      socket.off('answer');
-      socket.off('ice-candidate');
-      socket.off('user-toggled-audio');
-      socket.off('user-toggled-video');
-      socket.off('meeting-ended-by-host');
-      socket.off('user-left');
-    };
-  }, [socket, code, user]);
 
-  // Create WebRTC PeerConnection
-  const createPeerConnection = (targetSocketId, userName, userId, isInitiator) => {
+  const createPeerConnection = useCallback((targetSocketId, userName, userId) => {
+    // If there's already a live connection, return it
+    if (peerConnections.current[targetSocketId]) {
+      return peerConnections.current[targetSocketId];
+    }
+
+    console.log(`[WebRTC DEBUG] Creating RTCPeerConnection for targetSocketId=${targetSocketId} (${userName || 'Guest'})`);
     const pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -248,29 +226,65 @@ export const MeetingRoomPage = () => {
     });
 
     peerConnections.current[targetSocketId] = pc;
+    pendingIceCandidates.current[targetSocketId] = [];
+
+    // Track state changes
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[WebRTC DEBUG] Peer ${targetSocketId} iceConnectionState -> ${pc.iceConnectionState}`);
+    };
+    pc.onconnectionstatechange = () => {
+      console.log(`[WebRTC DEBUG] Peer ${targetSocketId} connectionState -> ${pc.connectionState}`);
+    };
+    pc.onsignalingstatechange = () => {
+      console.log(`[WebRTC DEBUG] Peer ${targetSocketId} signalingState -> ${pc.signalingState}`);
+    };
 
     // Add local tracks to peer connection
-    if (localStream) {
-      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+    const stream = localStreamRef.current;
+    if (stream) {
+      console.log(`[WebRTC DEBUG] Adding ${stream.getTracks().length} tracks from localStreamRef to peer ${targetSocketId}`);
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    } else {
+      console.warn(`[WebRTC DEBUG] localStreamRef is not available when creating PC for ${targetSocketId}`);
     }
 
     // Handle incoming remote tracks
     pc.ontrack = (e) => {
+      // Use existing remote stream for this socket or create new MediaStream
+      const existingStream = remoteStreamsRef.current[targetSocketId]?.stream;
+      let remoteStream;
+
+      if (e.streams && e.streams[0]) {
+        remoteStream = e.streams[0];
+      } else if (existingStream) {
+        if (!existingStream.getTracks().some((t) => t.id === e.track.id)) {
+          existingStream.addTrack(e.track);
+        }
+        remoteStream = existingStream;
+      } else {
+        remoteStream = new MediaStream([e.track]);
+      }
+
+      console.log(`[WebRTC DEBUG] ontrack from ${targetSocketId} – kind=${e.track.kind}, id=${e.track.id}, totalTracks=${remoteStream.getTracks().length}`);
       setRemoteStreams((prev) => ({
         ...prev,
         [targetSocketId]: {
-          stream: e.streams[0],
-          userName: userName || 'Participant',
-          userId,
-          muted: false,
-          videoOff: false,
+          ...(prev[targetSocketId] || {}),
+          stream: remoteStream,
+          userName: userName || prev[targetSocketId]?.userName || 'Participant',
+          userId: userId || prev[targetSocketId]?.userId,
+          muted: prev[targetSocketId]?.muted ?? false,
+          videoOff: prev[targetSocketId]?.videoOff ?? false,
         },
       }));
+      // Update participants list in RTC context
+      addRemoteParticipant(targetSocketId, userName || 'Participant', remoteStream);
     };
 
     // Handle ICE candidates
     pc.onicecandidate = (e) => {
-      if (e.candidate) {
+      if (e.candidate && socket) {
+        console.log(`[WebRTC DEBUG] Local ICE candidate generated for ${targetSocketId}`);
         socket.emit('ice-candidate', {
           target: targetSocketId,
           candidate: e.candidate,
@@ -278,20 +292,281 @@ export const MeetingRoomPage = () => {
       }
     };
 
-    // If initiator, create and send Offer
-    if (isInitiator) {
-      pc.createOffer().then((offer) => {
-        pc.setLocalDescription(offer);
+    // Handle negotiation needed (fires when tracks are added after initial setup)
+    pc.onnegotiationneeded = async () => {
+      try {
+        if (pc.signalingState !== 'stable') {
+          console.log(`[WebRTC DEBUG] negotiationneeded skipped for ${targetSocketId} because signalingState is ${pc.signalingState}`);
+          return;
+        }
+        console.log(`[WebRTC DEBUG] negotiationneeded triggered for ${targetSocketId}. Creating offer...`);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
         socket.emit('offer', {
           target: targetSocketId,
-          caller: { userId: user._id, userName: user.name },
+          caller: { userId: user?._id, userName: user?.name },
           offer,
         });
-      });
-    }
+      } catch (err) {
+        console.error(`[WebRTC DEBUG] Error in onnegotiationneeded for ${targetSocketId}:`, err);
+      }
+    };
 
     return pc;
-  };
+  }, [socket, addRemoteParticipant, user?._id, user?.name]);
+
+  // Helper: flush queued ICE candidates after remote description is set
+  const flushIceQueue = useCallback(async (socketId, pc) => {
+    const queue = pendingIceCandidates.current[socketId];
+    if (!queue) return;
+    while (queue.length) {
+      const candidate = queue.shift();
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.warn('[WebRTC] Error flushing queued ICE candidate:', e);
+      }
+    }
+  }, []);
+
+  // WebSockets & WebRTC Signaling Setup (single source of truth)
+  useEffect(() => {
+    if (!socket || !code || !user) return;
+
+    console.log('[MeetingRoom] Setting up signaling listeners for meeting', code.toUpperCase());
+
+    // ---------- existing-participants: create PCs and send offers ----------
+    const handleExistingParticipants = async ({ participants }) => {
+      console.log('[WebRTC DEBUG] existing-participants received:', participants);
+      for (const { socketId: remoteId, userId: uid, userName: uname } of participants) {
+        if (peerConnections.current[remoteId]) {
+          console.log(`[WebRTC DEBUG] Peer connection already exists for ${remoteId}, skipping existing-participants offer`);
+          continue;
+        }
+        const pc = createPeerConnection(remoteId, uname, uid);
+        // Add placeholder entry for participant even before media arrives
+        setRemoteStreams((prev) => ({
+          ...prev,
+          [remoteId]: {
+            stream: null,
+            userName: uname || 'Participant',
+            userId: uid,
+            muted: false,
+            videoOff: false,
+          },
+        }));
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          console.log(`[WebRTC DEBUG] Sending offer to existing participant ${remoteId}`);
+          socket.emit('offer', {
+            target: remoteId,
+            caller: { userId: user._id, userName: user.name },
+            offer,
+          });
+        } catch (err) {
+          console.error(`[WebRTC DEBUG] Error creating offer for ${remoteId}:`, err);
+        }
+      }
+    };
+
+    // ---------- user-joined: a new peer entered ----------
+    const handleUserJoined = async ({ socketId, userId: uid, userName: uname }) => {
+      console.log('[WebRTC DEBUG] user-joined received:', socketId, uid, uname);
+      // Add placeholder entry for the new participant so UI updates immediately
+      setRemoteStreams((prev) => ({
+        ...prev,
+        [socketId]: {
+          stream: null,
+          userName: uname || 'Participant',
+          userId: uid,
+          muted: false,
+          videoOff: false,
+        },
+      }));
+      // Pre-create peer connection so it's ready when the offer arrives.
+      // Notice: The newcomer who received 'existing-participants' creates the offer.
+      // Existing peers DO NOT send a simultaneous offer here to avoid offer collisions/glare!
+      if (!peerConnections.current[socketId]) {
+        console.log(`[WebRTC DEBUG] Pre-creating peer connection for joining peer ${socketId}`);
+        createPeerConnection(socketId, uname, uid);
+      }
+    };
+
+    // ---------- offer (with glare / simultaneous-offer resolution) ----------
+    const handleOffer = async ({ socketId, offer, caller }) => {
+      console.log(`[WebRTC DEBUG] Received offer from ${socketId} (caller=${caller?.userName || 'unknown'})`);
+      let pc = peerConnections.current[socketId];
+
+      // Glare resolution: if we already sent an offer (have-local-offer),
+      // use "polite peer" pattern: the peer with the higher socket.id yields.
+      if (pc && pc.signalingState === 'have-local-offer') {
+        const weArePolite = socket.id > socketId; // higher id = polite = yields
+        if (weArePolite) {
+          // Roll back our own offer and accept theirs
+          console.log(`[WebRTC DEBUG] Glare detected – rolling back our offer for ${socketId}`);
+          await pc.setLocalDescription({ type: 'rollback' });
+        } else {
+          // We are impolite – ignore the incoming offer; our offer wins
+          console.log(`[WebRTC DEBUG] Glare detected – ignoring remote offer from ${socketId}`);
+          return;
+        }
+      }
+
+      if (!pc) {
+        console.log(`[WebRTC DEBUG] Creating peer connection on-demand for incoming offer from ${socketId}`);
+        pc = createPeerConnection(socketId, caller?.userName, caller?.userId);
+      }
+
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        console.log(`[WebRTC DEBUG] Set remote description (offer) for ${socketId}`);
+        await flushIceQueue(socketId, pc);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        console.log(`[WebRTC DEBUG] Created and set local description (answer), sending to ${socketId}`);
+        socket.emit('answer', {
+          target: socketId,
+          caller: { userId: user?._id, userName: user?.name },
+          answer,
+        });
+      } catch (err) {
+        console.error(`[WebRTC DEBUG] Error handling offer from ${socketId}:`, err);
+      }
+    };
+
+    // ---------- answer (guarded against duplicate / stale answers) ----------
+    const handleAnswer = async ({ socketId, answer }) => {
+      console.log(`[WebRTC DEBUG] Received answer from ${socketId}`);
+      const pc = peerConnections.current[socketId];
+      if (!pc) {
+        console.warn(`[WebRTC DEBUG] Received answer but no peer connection for ${socketId}`);
+        return;
+      }
+      if (pc.signalingState !== 'have-local-offer') {
+        console.warn(
+          `[WebRTC DEBUG] Ignoring stale/duplicate answer from ${socketId} (signalingState=${pc.signalingState})`
+        );
+        return;
+      }
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log(`[WebRTC DEBUG] Set remote description (answer) for ${socketId}`);
+        await flushIceQueue(socketId, pc);
+      } catch (err) {
+        console.error(`[WebRTC DEBUG] Error setting remote answer from ${socketId}:`, err);
+      }
+    };
+
+    // ---------- ice-candidate (queue if remote description not yet set) ----------
+    const handleIceCandidate = async ({ socketId, candidate }) => {
+      const pc = peerConnections.current[socketId];
+      if (!pc) return;
+      if (!pc.remoteDescription) {
+        console.log(`[WebRTC DEBUG] Queuing ICE candidate from ${socketId} (remoteDescription not set yet)`);
+        // Queue it — will be flushed after setRemoteDescription
+        if (!pendingIceCandidates.current[socketId]) {
+          pendingIceCandidates.current[socketId] = [];
+        }
+        pendingIceCandidates.current[socketId].push(candidate);
+        return;
+      }
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        console.log(`[WebRTC DEBUG] Successfully added ICE candidate from ${socketId}`);
+      } catch (err) {
+        console.warn(`[WebRTC DEBUG] Error adding ICE candidate from ${socketId}:`, err);
+      }
+    };
+
+    // ---------- user-left ----------
+    const handleUserLeft = ({ socketId }) => {
+      const pc = peerConnections.current[socketId];
+      if (pc) {
+        pc.ontrack = null;
+        pc.onicecandidate = null;
+        pc.close();
+        delete peerConnections.current[socketId];
+        delete pendingIceCandidates.current[socketId];
+      }
+      setRemoteStreams((prev) => {
+        const next = { ...prev };
+        delete next[socketId];
+        return next;
+      });
+    };
+
+    // ---------- media toggle relays ----------
+    const handleUserToggledAudio = ({ socketId, muted }) => {
+      setRemoteStreams((prev) => {
+        if (!prev[socketId]) return prev;
+        return { ...prev, [socketId]: { ...prev[socketId], muted } };
+      });
+    };
+
+    const handleUserToggledVideo = ({ socketId, videoOff }) => {
+      setRemoteStreams((prev) => {
+        if (!prev[socketId]) return prev;
+        return { ...prev, [socketId]: { ...prev[socketId], videoOff } };
+      });
+    };
+
+    // ---------- host ended meeting ----------
+    const handleMeetingEnded = () => {
+      cleanupMeetingSession();
+      navigate('/meetings');
+    };
+
+    // ---------- live transcript entry ----------
+    const handleNewTranscriptEntry = (entry) => {
+      if (!entry || !entry.text) return;
+      setLiveTranscript((prev) => {
+        const exists = prev.some(
+          (e) =>
+            e.speaker === entry.speaker &&
+            e.text.trim().toLowerCase() === entry.text.trim().toLowerCase() &&
+            e.timestamp === entry.timestamp
+        );
+        if (exists) return prev;
+        return [...prev, entry];
+      });
+    };
+
+    // Register all listeners BEFORE emitting join-meeting to avoid race conditions
+    socket.on('existing-participants', handleExistingParticipants);
+    socket.on('user-joined', handleUserJoined);
+    socket.on('offer', handleOffer);
+    socket.on('answer', handleAnswer);
+    socket.on('ice-candidate', handleIceCandidate);
+    socket.on('user-left', handleUserLeft);
+    socket.on('user-toggled-audio', handleUserToggledAudio);
+    socket.on('user-toggled-video', handleUserToggledVideo);
+    socket.on('meeting-ended-by-host', handleMeetingEnded);
+    socket.on('new-transcript-entry', handleNewTranscriptEntry);
+
+    // NOW emit join event (listeners are ready to receive the server's response)
+    console.log('[MeetingRoom] Joining meeting', code.toUpperCase(), 'as user', user._id, user.name);
+    socket.emit('join-meeting', {
+      meetingCode: code.toUpperCase(),
+      userId: user._id,
+      userName: user.name,
+    });
+
+    // Cleanup on unmount or dependency change
+    return () => {
+      socket.emit('leave-meeting');
+      socket.off('existing-participants', handleExistingParticipants);
+      socket.off('user-joined', handleUserJoined);
+      socket.off('offer', handleOffer);
+      socket.off('answer', handleAnswer);
+      socket.off('ice-candidate', handleIceCandidate);
+      socket.off('user-left', handleUserLeft);
+      socket.off('user-toggled-audio', handleUserToggledAudio);
+      socket.off('user-toggled-video', handleUserToggledVideo);
+      socket.off('meeting-ended-by-host', handleMeetingEnded);
+      socket.off('new-transcript-entry', handleNewTranscriptEntry);
+    };
+  }, [socket, code, user, createPeerConnection, flushIceQueue, cleanupMeetingSession, navigate]);
 
   // Toggle Microphone
   const toggleAudio = () => {
@@ -481,11 +756,16 @@ export const MeetingRoomPage = () => {
       cleanupMeetingSession();
 
       if (meetingId) {
+        const finalTranscript = (liveTranscriptRef.current || liveTranscript).filter(
+          (t) => t && typeof t.text === 'string' && t.text.trim().length > 0
+        );
+
+        if (finalTranscript.length === 0) {
+          toast('Meeting ended with no speech transcribed.', { icon: 'ℹ️' });
+        }
+
         await meetingService.endMeeting(meetingId, {
-          transcript: liveTranscript.length > 0 ? liveTranscript : [
-            { speaker: user.name, text: 'Discussed Q4 platform roadmap, WebRTC signaling performance, and action item assignments.' },
-            { speaker: 'Team Member', text: 'Confirmed deployment of fallback server configuration and user notifications.' }
-          ],
+          transcript: finalTranscript,
         });
         navigate(`/meetings/${meetingId}`);
       } else {
@@ -514,9 +794,31 @@ export const MeetingRoomPage = () => {
             <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono">
               <span>Code: {code}</span>
               <span>•</span>
-              <span className="text-brand-400 font-bold flex items-center gap-1">
-                <Sparkles className="w-3 h-3" /> AI Transcription Active
-              </span>
+              {transcriptionStatus === 'speaking' ? (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-sans font-semibold text-[10px]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Speaking
+                </span>
+              ) : transcriptionStatus === 'muted' ? (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 font-sans font-semibold text-[10px]">
+                  <MicOff className="w-2.5 h-2.5" /> Mic Muted
+                </span>
+              ) : transcriptionStatus === 'unsupported' ? (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-sans font-semibold text-[10px]">
+                  <AlertCircle className="w-2.5 h-2.5" /> STT Not Supported
+                </span>
+              ) : transcriptionStatus === 'error' ? (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20 font-sans font-semibold text-[10px]">
+                  <AlertCircle className="w-2.5 h-2.5" /> STT Error
+                </span>
+              ) : !isTranscriptionEnabled || transcriptionStatus === 'stopped' ? (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-sans font-semibold text-[10px]">
+                  Transcription Off
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-400 border border-brand-500/20 font-sans font-semibold text-[10px]">
+                  <Sparkles className="w-2.5 h-2.5" /> Live Transcribing
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -525,6 +827,28 @@ export const MeetingRoomPage = () => {
           <button
             onClick={() => {
               setShowParticipants(false);
+              setShowChat(false);
+              setShowTranscript(!showTranscript);
+            }}
+            className={`p-2.5 rounded-xl border transition-colors relative ${
+              showTranscript
+                ? 'bg-brand-600 border-brand-500 text-white'
+                : 'bg-slate-800 border-slate-700/60 text-slate-300 hover:bg-slate-750'
+            }`}
+            title="Toggle Live Transcript"
+          >
+            <FileText className="w-4 h-4" />
+            {liveTranscript.length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-brand-500 text-white text-[10px] font-bold rounded-full h-4 min-w-[16px] px-1 flex items-center justify-center">
+                {liveTranscript.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => {
+              setShowParticipants(false);
+              setShowTranscript(false);
               setShowChat(!showChat);
             }}
             className={`p-2.5 rounded-xl border transition-colors relative ${
@@ -538,6 +862,7 @@ export const MeetingRoomPage = () => {
           <button
             onClick={() => {
               setShowChat(false);
+              setShowTranscript(false);
               setShowParticipants(!showParticipants);
             }}
             className={`p-2.5 rounded-xl border transition-colors relative ${
@@ -546,6 +871,9 @@ export const MeetingRoomPage = () => {
             title="Toggle Participants"
           >
             <Users className="w-4 h-4" />
+            <span className="absolute -top-1 -right-1 bg-brand-500 text-white text-[10px] font-bold rounded-full h-4 w-4 flex items-center justify-center">
+              {remoteEntries.length + 1}
+            </span>
           </button>
         </div>
       </header>
@@ -553,30 +881,60 @@ export const MeetingRoomPage = () => {
       {/* Main Room Body Grid */}
       <div className="flex-1 flex overflow-hidden relative p-4 gap-4">
         {/* Video Grid Area */}
-        <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 overflow-y-auto max-h-full items-center justify-center">
-          {/* Local User Tile */}
-          <VideoTile
-            stream={localStream}
-            userName={user?.name || 'You'}
-            isLocal
-            isMuted={isMuted}
-            isVideoOff={isVideoOff}
-            isScreenSharing={isScreenSharing}
-          />
-
-          {/* Remote Participants Tiles */}
-          {remoteEntries.map(([socketId, remoteData]) => (
+        <div className="flex-1 relative flex flex-col min-w-0">
+          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 overflow-y-auto max-h-full items-center justify-center">
+            {/* Local User Tile */}
             <VideoTile
-              key={socketId}
-              stream={remoteData.stream}
-              userName={remoteData.userName}
-              isMuted={remoteData.muted}
-              isVideoOff={remoteData.videoOff}
+              stream={localStream}
+              userName={user?.name || 'You'}
+              isLocal
+              isMuted={isMuted}
+              isVideoOff={isVideoOff}
+              isScreenSharing={isScreenSharing}
             />
-          ))}
+
+            {/* Remote Participants Tiles */}
+            {remoteEntries.map(([socketId, remoteData]) => (
+              <VideoTile
+                key={socketId}
+                stream={remoteData.stream}
+                userName={remoteData.userName}
+                isMuted={remoteData.muted}
+                isVideoOff={remoteData.videoOff}
+              />
+            ))}
+          </div>
+
+          {/* Floating Live Speech Subtitle Caption Banner */}
+          {interimTranscript && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 max-w-xl w-[90%] bg-slate-950/90 backdrop-blur-md border border-brand-500/40 rounded-2xl px-5 py-3 shadow-2xl z-20 pointer-events-none transition-all">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="w-2 h-2 rounded-full bg-brand-400 animate-pulse" />
+                <span className="text-xs font-bold text-brand-300">
+                  {user?.name || 'You'} (Speaking):
+                </span>
+              </div>
+              <p className="text-sm font-medium text-slate-100 tracking-wide line-clamp-3">
+                {interimTranscript}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Side Panels Drawers */}
+        {showTranscript && (
+          <TranscriptPanel
+            liveTranscript={liveTranscript}
+            interimText={interimTranscript}
+            status={transcriptionStatus}
+            error={transcriptionError}
+            isMuted={isMuted}
+            isEnabled={isTranscriptionEnabled}
+            onToggleEnable={toggleTranscription}
+            onClose={() => setShowTranscript(false)}
+          />
+        )}
+
         {showChat && (
           <ChatPanel
             meetingId={meeting?._id}
@@ -647,6 +1005,27 @@ export const MeetingRoomPage = () => {
             title={isScreenSharing ? 'Stop Screen Share' : 'Share Screen'}
           >
             <Monitor className="w-5 h-5" />
+          </button>
+
+          <button
+            onClick={() => {
+              setShowChat(false);
+              setShowParticipants(false);
+              setShowTranscript(!showTranscript);
+            }}
+            className={`p-3.5 rounded-2xl border transition-all shadow-lg relative ${
+              showTranscript
+                ? 'bg-brand-600 border-brand-500 text-white shadow-brand-600/30'
+                : 'bg-slate-800 border-slate-700/80 text-slate-200 hover:bg-slate-700'
+            }`}
+            title={showTranscript ? 'Hide Live Transcript' : 'Show Live Transcript'}
+          >
+            <FileText className="w-5 h-5" />
+            {liveTranscript.length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-brand-500 text-white text-[10px] font-bold rounded-full h-4 min-w-[16px] px-1 flex items-center justify-center">
+                {liveTranscript.length}
+              </span>
+            )}
           </button>
 
           {/* Leave / End Buttons */}

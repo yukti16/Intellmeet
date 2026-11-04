@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { Modal } from '../common/Modal';
 import { Input } from '../common/Input';
 import { Button } from '../common/Button';
@@ -15,21 +16,36 @@ export const CreateActionItemModal = ({ isOpen, onClose, meetingId, onCreated })
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const resetForm = () => {
+    setTitle('');
+    setDescription('');
+    setAssignedTo('');
+    setPriority('Medium');
+    const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    setDueDate(future.toISOString().slice(0, 10));
+    setError('');
+  };
+
   useEffect(() => {
     if (isOpen) {
       userService.getUsers().then((res) => {
         setUsers(res.users || []);
       }).catch(err => console.error(err));
       
-      const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-      setDueDate(future.toISOString().slice(0, 10));
+      resetForm();
     }
   }, [isOpen]);
 
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!title.trim()) {
-      setError('Title is required');
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) {
+      setError('Action item title is required');
       return;
     }
 
@@ -37,26 +53,34 @@ export const CreateActionItemModal = ({ isOpen, onClose, meetingId, onCreated })
     setError('');
 
     try {
-      const res = await actionItemService.createActionItem({
-        meeting: meetingId,
-        title,
-        description,
+      const payload = {
+        title: trimmedTitle,
+        description: description.trim(),
         assignedTo: assignedTo || null,
         priority,
         dueDate: dueDate ? new Date(dueDate) : undefined,
-      });
+        meeting: meetingId ? meetingId : null,
+      };
 
+      const res = await actionItemService.createActionItem(payload);
+      toast.success('Action item created successfully');
+      resetForm();
       onClose();
       if (onCreated) onCreated(res.actionItem);
     } catch (err) {
-      setError(err.message || 'Failed to create action item');
+      const msg = err?.response?.data?.message || err.message || 'Failed to create action item';
+      setError(msg);
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Add New Action Item">
+    <Modal
+      isOpen={isOpen}
+      onClose={handleClose}
+      title={meetingId ? 'Add Meeting Action Item' : 'Add New Action Item'}
+    >
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && (
           <div className="p-3 bg-rose-950/40 border border-rose-800 text-rose-300 text-xs rounded-lg">
@@ -128,7 +152,7 @@ export const CreateActionItemModal = ({ isOpen, onClose, meetingId, onCreated })
         />
 
         <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
-          <Button type="button" variant="ghost" onClick={onClose}>
+          <Button type="button" variant="ghost" onClick={handleClose}>
             Cancel
           </Button>
           <Button type="submit" variant="primary" isLoading={isLoading}>

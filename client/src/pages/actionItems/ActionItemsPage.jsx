@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { actionItemService } from '../../services/actionItemService';
 import { ActionItemCard } from '../../components/actionItem/ActionItemCard';
 import { CreateActionItemModal } from '../../components/actionItem/CreateActionItemModal';
+import { EditActionItemModal } from '../../components/actionItem/EditActionItemModal';
 import { Button } from '../../components/common/Button';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
@@ -14,6 +15,7 @@ export const ActionItemsPage = () => {
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
 
   const fetchActionItems = async () => {
     setIsLoading(true);
@@ -187,6 +189,7 @@ export const ActionItemsPage = () => {
               key={item._id}
               actionItem={item}
               onStatusChange={handleStatusChange}
+              onEdit={(task) => setEditingItem(task)}
             />
           ))}
         </div>
@@ -197,6 +200,21 @@ export const ActionItemsPage = () => {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onCreated={handleCreated}
+      />
+
+      {/* Edit Action Item Modal */}
+      <EditActionItemModal
+        isOpen={!!editingItem}
+        actionItem={editingItem}
+        onClose={() => setEditingItem(null)}
+        onUpdated={(updated) => {
+          handleStatusChange(updated);
+          setEditingItem(null);
+        }}
+        onDeleted={(deletedId) => {
+          setActionItems((prev) => prev.filter((i) => i._id !== deletedId));
+          setEditingItem(null);
+        }}
       />
     </div>
   );

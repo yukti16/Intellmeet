@@ -1,9 +1,19 @@
 import React from 'react';
-import { Calendar, Clock, Users, Video, Copy, Check } from 'lucide-react';
+import { Calendar, Clock, Users, Video, Copy, Check, Trash2 } from 'lucide-react';
 import { Button } from '../common/Button';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
+import { meetingService } from '../../services/meetingService';
+import toast from 'react-hot-toast';
+import {
+  getMeetingEffectiveStatus,
+  getStatusBadgeConfig,
+  sanitizeMeetingTitle,
+  sanitizeMeetingDescription,
+} from '../../utils/meetingUtils';
 
 export const MeetingCard = ({ meeting, onJoin, onDelete }) => {
+  const { user, isAdmin } = useAuth();
   const [copied, setCopied] = React.useState(false);
   const navigate = useNavigate();
 
@@ -14,12 +24,42 @@ export const MeetingCard = ({ meeting, onJoin, onDelete }) => {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const statusColors = {
-    scheduled: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-    live: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 animate-pulse',
-    ended: 'bg-slate-700/50 text-slate-400 border-slate-700',
-    cancelled: 'bg-rose-500/20 text-rose-400 border-rose-500/30',
+  const handleDelete = async (e) => {
+    e.stopPropagation();
+    if (!window.confirm('Are you sure you want to delete this meeting? This action cannot be undone.')) {
+      return;
+    }
+    try {
+      await meetingService.deleteMeeting(meeting._id);
+      toast.success('Meeting deleted');
+      if (onDelete) onDelete(meeting);
+    } catch (err) {
+      const msg = err?.response?.data?.message || 'Failed to delete meeting';
+      toast.error(msg);
+    }
   };
+  const effectiveStatus = getMeetingEffectiveStatus(meeting);
+  const badgeConfig = getStatusBadgeConfig(effectiveStatus);
+  const cleanTitle = sanitizeMeetingTitle(meeting.title, meeting.meetingCode);
+  const cleanDescription = sanitizeMeetingDescription(meeting.description);
+
+  // Helper to extract host ID regardless of population
+  const getHostId = (host) => {
+    if (!host) return null;
+    if (typeof host === 'string') return host;
+    return host._id?.toString() || host.id?.toString() || null;
+  };
+
+  // Helper to extract current user ID (supports _id or id)
+  const getUserId = (usr) => {
+    if (!usr) return null;
+    if (typeof usr === 'string') return usr;
+    return usr._id?.toString() || usr.id?.toString() || null;
+  };
+
+  const hostId = getHostId(meeting.host);
+  const userId = getUserId(user);
+  const canDelete = isAdmin || Boolean(hostId && userId && hostId === userId);
 
   return (
     <div
@@ -30,14 +70,21 @@ export const MeetingCard = ({ meeting, onJoin, onDelete }) => {
         {/* Header Row */}
         <div className="flex items-start justify-between gap-3 mb-3">
           <span
-            className={`px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider rounded-lg border ${
-              statusColors[meeting.status] || statusColors.scheduled
-            }`}
+            className={`px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider rounded-lg border ${badgeConfig.className}`}
           >
-            {meeting.status}
+            {badgeConfig.label}
           </span>
 
           <div className="flex items-center gap-1">
+              {canDelete && (
+                <button
+                  onClick={handleDelete}
+                  className="p-1.5 text-red-400 hover:text-red-100 hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-1 text-[11px] font-mono"
+                  title="Delete Meeting"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
             <button
               onClick={handleCopyCode}
               className="p-1.5 text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-1 text-[11px] font-mono"
@@ -51,11 +98,15 @@ export const MeetingCard = ({ meeting, onJoin, onDelete }) => {
 
         {/* Title & Description */}
         <h3 className="text-base font-bold text-slate-100 group-hover:text-brand-400 transition-colors line-clamp-1 mb-1">
-          {meeting.title}
+          {cleanTitle}
         </h3>
-        <p className="text-xs text-slate-400 line-clamp-2 mb-4">
-          {meeting.description || 'No description provided.'}
-        </p>
+        {cleanDescription ? (
+          <p className="text-xs text-slate-400 line-clamp-2 mb-4">
+            {cleanDescription}
+          </p>
+        ) : (
+          <div className="mb-4" />
+        )}
       </div>
 
       <div>
@@ -76,23 +127,23 @@ export const MeetingCard = ({ meeting, onJoin, onDelete }) => {
 
         {/* Action Button */}
         <div className="flex items-center gap-2">
-          {meeting.status !== 'ended' && (
+          {effectiveStatus !== 'ended' && (
             <Button
               onClick={(e) => {
                 e.stopPropagation();
                 if (onJoin) onJoin(meeting);
                 else navigate(`/room/${meeting.meetingCode}`);
               }}
-              variant={meeting.status === 'live' ? 'primary' : 'secondary'}
+              variant={effectiveStatus === 'live' ? 'primary' : 'secondary'}
               size="sm"
               className="w-full"
             >
               <Video className="w-4 h-4 mr-1.5" />
-              {meeting.status === 'live' ? 'Join Live Room' : 'Start / Join'}
+              {effectiveStatus === 'live' ? 'Join Live Room' : 'Start / Join'}
             </Button>
           )}
 
-          {meeting.status === 'ended' && (
+          {effectiveStatus === 'ended' && (
             <Button
               onClick={(e) => {
                 e.stopPropagation();

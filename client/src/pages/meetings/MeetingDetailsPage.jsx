@@ -1,10 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
+import toast from 'react-hot-toast';
 import { meetingService } from '../../services/meetingService';
 import { ActionItemCard } from '../../components/actionItem/ActionItemCard';
 import { CreateActionItemModal } from '../../components/actionItem/CreateActionItemModal';
+import { EditActionItemModal } from '../../components/actionItem/EditActionItemModal';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Button } from '../../components/common/Button';
+import {
+  getMeetingEffectiveStatus,
+  getStatusBadgeConfig,
+  sanitizeMeetingTitle,
+  sanitizeMeetingDescription,
+} from '../../utils/meetingUtils';
 import {
   Sparkles,
   Calendar,
@@ -17,7 +26,7 @@ import {
   Video,
   Plus,
   ArrowLeft,
-  Share2,
+  Share2, Trash2, Shield,
 } from 'lucide-react';
 
 export const MeetingDetailsPage = () => {
@@ -26,7 +35,42 @@ export const MeetingDetailsPage = () => {
   const [activeTab, setActiveTab] = useState('summary');
   const [isLoading, setIsLoading] = useState(true);
   const [isActionModalOpen, setIsActionModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
+  const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
+
+  // Helper to extract host ID regardless of population or raw ObjectId
+  const getHostId = (host) => {
+    if (!host) return null;
+    if (typeof host === 'string') return host;
+    return host._id?.toString() || host.id?.toString() || null;
+  };
+
+  // Helper to extract current user ID (supports _id or id)
+  const getUserId = (usr) => {
+    if (!usr) return null;
+    if (typeof usr === 'string') return usr;
+    return usr._id?.toString() || usr.id?.toString() || null;
+  };
+
+  // Compute canDelete safely — meeting may be null during loading
+  const hostId = meeting ? getHostId(meeting.host) : null;
+  const userId = getUserId(user);
+  const canDelete = isAdmin || Boolean(hostId && userId && hostId === userId);
+
+  const handleDelete = async () => {
+    if (!window.confirm('Are you sure you want to delete this meeting? This action cannot be undone.')) {
+      return;
+    }
+    try {
+      await meetingService.deleteMeeting(meeting._id);
+      toast.success('Meeting deleted');
+      navigate('/meetings');
+    } catch (err) {
+      const msg = err?.response?.data?.message || 'Failed to delete meeting';
+      toast.error(msg);
+    }
+  };
 
   const fetchDetails = async () => {
     setIsLoading(true);
@@ -58,6 +102,10 @@ export const MeetingDetailsPage = () => {
   }
 
   const summary = meeting.summary || {};
+  const effectiveStatus = getMeetingEffectiveStatus(meeting);
+  const badgeConfig = getStatusBadgeConfig(effectiveStatus);
+  const cleanTitle = sanitizeMeetingTitle(meeting.title, meeting.meetingCode);
+  const cleanDescription = sanitizeMeetingDescription(meeting.description);
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -70,10 +118,19 @@ export const MeetingDetailsPage = () => {
           <ArrowLeft className="w-4 h-4" /> Back to Meetings
         </button>
 
-        {meeting.status !== 'ended' && (
+        {effectiveStatus !== 'ended' && (
           <Button onClick={() => navigate(`/room/${meeting.meetingCode}`)} variant="primary" size="sm">
             <Video className="w-4 h-4 mr-1.5" /> Join Live Room
           </Button>
+        )}
+        {canDelete && (
+          <button
+            onClick={handleDelete}
+            className="p-1.5 text-red-400 hover:text-red-100 hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-1 text-xs font-mono"
+            title="Delete Meeting"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
         )}
       </div>
 
@@ -82,16 +139,16 @@ export const MeetingDetailsPage = () => {
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-slate-800/80 pb-6 mb-6">
           <div>
             <div className="flex items-center gap-2 mb-2">
-              <span className="px-3 py-1 bg-brand-500/10 border border-brand-500/20 text-brand-400 text-xs font-bold rounded-lg uppercase">
-                {meeting.status}
+              <span className={`px-3 py-1 border text-xs font-bold rounded-lg uppercase ${badgeConfig.className}`}>
+                {badgeConfig.label}
               </span>
               <span className="text-xs font-mono text-slate-400">Code: {meeting.meetingCode}</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-              {meeting.title}
+              {cleanTitle}
             </h1>
-            {meeting.description && (
-              <p className="text-xs sm:text-sm text-slate-400 mt-2">{meeting.description}</p>
+            {cleanDescription && (
+              <p className="text-xs sm:text-sm text-slate-400 mt-2">{cleanDescription}</p>
             )}
           </div>
 
@@ -210,6 +267,47 @@ export const MeetingDetailsPage = () => {
               </ul>
             </div>
           </div>
+
+          {/* Risks & Follow-Up Recommendations */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Identified Risks & Blockers */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg">
+              <div className="flex items-center gap-2 text-amber-400 font-bold text-xs uppercase tracking-wider mb-3">
+                <Shield className="w-4 h-4" />
+                <span>Identified Risks & Blockers</span>
+              </div>
+              <ul className="space-y-2 text-xs text-slate-300">
+                {(summary.risks && summary.risks.length > 0
+                  ? summary.risks
+                  : ['No critical blockers or risks identified.']
+                ).map((risk, i) => (
+                  <li key={i} className="flex items-start gap-2 bg-slate-950/50 p-2.5 rounded-lg border border-slate-800">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 mt-1.5 flex-shrink-0" />
+                    <span>{risk}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Follow-Up Recommendations */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg">
+              <div className="flex items-center gap-2 text-sky-400 font-bold text-xs uppercase tracking-wider mb-3">
+                <Clock className="w-4 h-4" />
+                <span>Follow-Up Recommendations & Next Steps</span>
+              </div>
+              <ul className="space-y-2 text-xs text-slate-300">
+                {(summary.followUp && summary.followUp.length > 0
+                  ? summary.followUp
+                  : ['Review progress during the next scheduled check-in.']
+                ).map((fu, i) => (
+                  <li key={i} className="flex items-start gap-2 bg-slate-950/50 p-2.5 rounded-lg border border-slate-800">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400 mt-1.5 flex-shrink-0" />
+                    <span>{fu}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
         </div>
       )}
 
@@ -232,6 +330,7 @@ export const MeetingDetailsPage = () => {
                   key={item._id}
                   actionItem={item}
                   onStatusChange={() => fetchDetails()}
+                  onEdit={(task) => setEditingItem(task)}
                 />
               ))}
             </div>
@@ -285,6 +384,21 @@ export const MeetingDetailsPage = () => {
         onClose={() => setIsActionModalOpen(false)}
         meetingId={meeting._id}
         onCreated={() => fetchDetails()}
+      />
+
+      {/* Edit Action Item Modal */}
+      <EditActionItemModal
+        isOpen={!!editingItem}
+        actionItem={editingItem}
+        onClose={() => setEditingItem(null)}
+        onUpdated={() => {
+          fetchDetails();
+          setEditingItem(null);
+        }}
+        onDeleted={() => {
+          fetchDetails();
+          setEditingItem(null);
+        }}
       />
     </div>
   );

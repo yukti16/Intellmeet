@@ -26,7 +26,17 @@ initSockets(io);
 
 // Start Server and Database Connection
 const startServer = async () => {
-  await connectDB();
+  try {
+    await connectDB();
+  } catch (error) {
+    console.error('====================================================');
+    console.error('❌ INTELLMEET SERVER FAILED TO START');
+    console.error('   Could not connect to MongoDB.');
+    console.error('   The server will NOT accept requests without a database connection.');
+    console.error('====================================================');
+    process.exit(1);
+  }
+
   server.listen(PORT, () => {
     console.log(`====================================================`);
     console.log(`🚀 INTELLMEET SERVER RUNNING ON PORT ${PORT}`);

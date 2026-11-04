@@ -82,6 +82,7 @@ const meetingSchema = new mongoose.Schema(
 
 meetingSchema.index({ meetingCode: 1 });
 meetingSchema.index({ host: 1 });
+meetingSchema.index({ workspace: 1, scheduledAt: -1 });
 meetingSchema.index({ scheduledAt: -1 });
 
 module.exports = mongoose.model('Meeting', meetingSchema);

@@ -5,7 +5,8 @@ const actionItemSchema = new mongoose.Schema(
     meeting: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Meeting',
-      required: true,
+      required: false,
+      default: null,
     },
     title: {
       type: String,
@@ -34,6 +35,16 @@ const actionItemSchema = new mongoose.Schema(
       type: String,
       enum: ['Pending', 'In Progress', 'Completed'],
       default: 'Pending',
+    },
+    source: {
+      type: String,
+      enum: ['manual', 'ai'],
+      default: 'manual',
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: false,
     },
   },
   {
