@@ -31,7 +31,7 @@ api.interceptors.response.use(
       localStorage.removeItem('intellmeet_user');
       // Redirect to login if unauthenticated on protected routes
       if (!window.location.pathname.includes('/login') && !window.location.pathname.includes('/register') && window.location.pathname !== '/') {
-        window.location.href = '/login';
+        window.location.href = `${import.meta.env.BASE_URL}login`;
       }
     }
     return Promise.reject(new Error(message));
