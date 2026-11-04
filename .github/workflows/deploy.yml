@@ -1,9 +1,9 @@
-
 name: Deploy IntellMeet Frontend
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
