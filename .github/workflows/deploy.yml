@@ -33,6 +33,9 @@ jobs:
 
       - name: Build frontend
         run: npm run build --prefix client
+        env:
+          VITE_API_URL: https://intellmeet-7b1t.onrender.com/api
+          VITE_SOCKET_URL: https://intellmeet-7b1t.onrender.com
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
